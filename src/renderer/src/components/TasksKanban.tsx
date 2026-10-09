@@ -36,6 +36,10 @@ export interface HiveTask {
   humanQA?: HumanQA[];
   /** GSD phase this card was promoted into (e.g. "999.1"). */
   phase?: string;
+  /** Pipeline column (e.g. "Discuss"), beside the coarse `status`. */
+  column?: string;
+  /** Last automatic-promotion failure (main parks the card on it). */
+  promoteError?: string;
 }
 
 /** The card's currently open question for the human, if any. An entry the human
@@ -110,7 +114,9 @@ export function parseTasks(raw: unknown): HiveTask[] {
             dismissedAt: typeof e.dismissedAt === 'string' ? e.dismissedAt : undefined
           }))
         : undefined,
-      phase: typeof t.phase === 'string' && t.phase ? t.phase : undefined
+      phase: typeof t.phase === 'string' && t.phase ? t.phase : undefined,
+      column: typeof t.column === 'string' && t.column ? t.column : undefined,
+      promoteError: typeof t.promoteError === 'string' && t.promoteError ? t.promoteError : undefined
     }));
 }
 
@@ -233,7 +239,7 @@ export function TasksKanban() {
                     onDismiss={() => dismissTask(t.id)}
                     onPromote={() => promoteTask(t.id)}
                     promoting={!!promoting[t.id]}
-                    promoteError={promoteError[t.id]}
+                    promoteError={promoteError[t.id] ?? t.promoteError}
                   />
                 ))}
               </div>

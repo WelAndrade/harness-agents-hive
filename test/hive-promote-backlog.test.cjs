@@ -65,3 +65,29 @@ test('a failed commit rolls back ROADMAP.md and the phase dir', { skip: !hasGsd 
   assert.deepEqual(fs.existsSync(path.join(proj, '.planning/phases')) ? fs.readdirSync(path.join(proj, '.planning/phases')) : [], []);
   assert.equal(hive.tasks().tasks.find((c) => c.id === 'c1').phase, undefined);
 });
+
+test('moving a card to Discuss promotes it once; a failure parks it', { skip: !hasGsd }, (t) => {
+  const { hive, proj } = setup(t, { git: true });
+  hive.patchTask('c1', { column: 'Discuss' });
+  hive.promoteQueuedTasks();
+  hive.promoteQueuedTasks(); // second tick is a no-op
+  assert.equal(hive.tasks().tasks[0].phase, '999.1');
+  assert.equal((fs.readFileSync(path.join(proj, '.planning/ROADMAP.md'), 'utf8').match(/### Phase 999/g) || []).length, 1);
+
+  const broken = setup(t, { git: false });
+  broken.hive.patchTask('c1', { column: 'Discuss' });
+  broken.hive.promoteQueuedTasks();
+  const parked = broken.hive.tasks().tasks[0];
+  assert.match(parked.promoteError, /commit failed/);
+  broken.hive.promoteQueuedTasks(); // parked → not retried
+  assert.equal(broken.hive.tasks().tasks[0].promoteError, parked.promoteError);
+});
+
+test('a successful promote sets column Discuss and clears a parked error', { skip: !hasGsd }, (t) => {
+  const { hive } = setup(t, { git: true });
+  hive.patchTask('c1', { promoteError: 'old failure' });
+  assert.equal(hive.promoteTaskToBacklog('c1').ok, true);
+  const card = hive.tasks().tasks[0];
+  assert.equal(card.column, 'Discuss');
+  assert.equal(card.promoteError, undefined);
+});

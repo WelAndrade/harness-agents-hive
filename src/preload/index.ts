@@ -170,6 +170,10 @@ export interface HiveTask {
   webhook?: { tokenHash: string };
   /** GSD phase this card was promoted into (e.g. "999.1"). */
   phase?: string;
+  /** Pipeline column (e.g. "Discuss"), beside the coarse `status`. */
+  column?: string;
+  /** Last automatic-promotion failure. */
+  promoteError?: string;
 }
 
 /** A message the router just delivered, with its resolved recipient ids. Drives

@@ -128,6 +128,9 @@ export interface HiveTask {
    *  once and never persisted), so a GET status lookup can match by hashing the
    *  presented token. Read-only capability: it never widens routing or exposure. */
   webhook?: { tokenHash: string };
+  /** GSD phase this card was promoted into (e.g. "999.1"). The card stays on
+   *  the board and walks the columns; the phase is the pointer into ROADMAP.md. */
+  phase?: string;
 }
 
 export interface AgentMeta {
@@ -1748,6 +1751,90 @@ export class HiveManager {
     this.writeTasks(next);
     return true;
   }
+
+  /** Kanban → GSD backlog bridge (item 5B). Promotes one card into the GOD
+   *  agent's project as a 999.x backlog phase — mirrors what `/gsd-capture
+   *  --backlog` does (workflows/add-backlog.md), driven straight off the
+   *  already-installed `gsd-tools.cjs` instead of spinning up an LLM for a
+   *  fully deterministic file edit. On success the card stays on the board,
+   *  linked to the new phase (`phase`), so it can walk the pipeline columns. */
+  promoteTaskToBacklog(id: string): { ok: boolean; error?: string; phase?: string } {
+    const ledger = this.tasks() as { tasks?: HiveTask[] };
+    const task = (ledger.tasks ?? []).find((t) => t?.id === id);
+    if (!task) return { ok: false, error: 'task not found' };
+    if (task.phase) return { ok: false, error: `already promoted to phase ${task.phase}` };
+
+    const godCwd = this.registry().agents[this.registry().godId ?? '']?.cwd;
+    if (!godCwd) return { ok: false, error: 'no god agent cwd — nothing to promote into' };
+    if (!existsSync(join(godCwd, '.planning', 'config.json'))) {
+      return { ok: false, error: 'GSD is not initialized in the project (.planning/config.json missing)' };
+    }
+    const gsdTools = [join(godCwd, '.claude/gsd-core/bin/gsd-tools.cjs'), join(homedir(), '.claude/gsd-core/bin/gsd-tools.cjs')]
+      .find((p) => existsSync(p));
+    if (!gsdTools) return { ok: false, error: 'gsd-tools.cjs not found (project-local or ~/.claude)' };
+
+    const gsdQuery = (...args: string[]): { ok: boolean; out: string } => {
+      const r = spawnSync(process.execPath, [gsdTools, 'query', ...args, '--raw', '--cwd', godCwd], {
+        encoding: 'utf8',
+        // Run the .cjs under Electron's bundled Node, not as a second app window
+        // (process.execPath is the Electron binary — see proxyBridge for the
+        // same pattern).
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      });
+      return { ok: r.status === 0, out: (r.stdout ?? '').trim() || (r.stderr ?? '').trim() };
+    };
+
+    const next = gsdQuery('phase.next-decimal', '999');
+    if (!next.ok) return { ok: false, error: `phase.next-decimal failed: ${next.out}` };
+    const slug = gsdQuery('generate-slug', task.title);
+    if (!slug.ok) return { ok: false, error: `generate-slug failed: ${slug.out}` };
+    const projectCode = gsdQuery('config-get', 'project_code');
+    const prefix = projectCode.ok && projectCode.out ? `${projectCode.out}-` : '';
+
+    const roadmapRel = '.planning/ROADMAP.md';
+    const roadmapPath = join(godCwd, roadmapRel);
+    const roadmapExisted = existsSync(roadmapPath);
+    const roadmap = roadmapExisted ? readFileSync(roadmapPath, 'utf8') : '';
+
+    const phaseDirRel = `.planning/phases/${prefix}${next.out}-${slug.out}`;
+    mkdirSync(join(godCwd, phaseDirRel), { recursive: true });
+    writeFileSync(join(godCwd, phaseDirRel, '.gitkeep'), '');
+
+    const goal = task.description?.trim() || '[Captured for future planning]';
+    const entry = [
+      '',
+      `### Phase ${next.out}: ${task.title} (BACKLOG)`,
+      '',
+      `**Goal:** ${goal}`,
+      '**Requirements:** TBD',
+      '**Plans:** 0 plans',
+      '',
+      'Plans:',
+      '- [ ] TBD (promote with /gsd-review-backlog when ready)',
+      ''
+    ].join('\n');
+    const heading = '## Backlog';
+    const headingAt = roadmap.indexOf(heading);
+    const nextRoadmap = headingAt === -1
+      ? `${roadmap.replace(/\s+$/, '')}\n\n${heading}\n${entry}`
+      : roadmap.slice(0, headingAt + heading.length) + entry + roadmap.slice(headingAt + heading.length);
+    writeFileSync(roadmapPath, nextRoadmap);
+
+    const commit = gsdQuery('commit', `docs: add backlog item ${next.out} — ${task.title}`, '--files', roadmapRel, `${phaseDirRel}/.gitkeep`);
+    // gsd-tools exits 0 on a failed commit — the --raw verdict is the signal
+    // ('failed' / 'nothing'; 'skipped' = commit_docs off, a legit success).
+    if (!commit.ok || commit.out === 'failed' || commit.out === 'nothing') {
+      // Undo the edits so a retry doesn't stack a duplicate backlog entry.
+      if (roadmapExisted) writeFileSync(roadmapPath, roadmap);
+      else rmSync(roadmapPath, { force: true });
+      rmSync(join(godCwd, phaseDirRel), { recursive: true, force: true });
+      return { ok: false, error: `commit failed: ${commit.out}` };
+    }
+
+    this.patchTask(id, { phase: next.out });
+    return { ok: true, phase: next.out };
+  }
+
   memory(id: string): string {
     const p = join(this.agentDir(id), 'memory.md');
     return existsSync(p) ? readFileSync(p, 'utf8') : '';

@@ -128,6 +128,16 @@ export interface HiveTask {
    *  once and never persisted), so a GET status lookup can match by hashing the
    *  presented token. Read-only capability: it never widens routing or exposure. */
   webhook?: { tokenHash: string };
+  /** GSD phase this card was promoted into (e.g. "999.1"). The card stays on
+   *  the board and walks the columns; the phase is the pointer into ROADMAP.md. */
+  phase?: string;
+  /** Pipeline column (department-defined, e.g. "Discuss"). Optional and beside
+   *  `status`, which stays the coarse todo/doing/blocked/done state. Moving an
+   *  unpromoted card to "Discuss" promotes it (promoteQueuedTasks). */
+  column?: string;
+  /** Last automatic-promotion failure. Parks the card until it's cleared or the
+   *  kanban ↑ button retries, so a broken setup isn't retried every tick. */
+  promoteError?: string;
 }
 
 export interface AgentMeta {
@@ -1424,7 +1434,7 @@ export class HiveManager {
       : '';
     const godLine = meta.isGod
       ? 'You are the GOD / ORCHESTRATOR of this hive — your job is to ORCHESTRATE, not to implement: maintain live situational awareness and delegate the work. (1) AWARENESS — always know what is going on: keep an accurate picture of every agent (active vs archived/idle), the task board, and all in-flight work; drain your inbox continually and triage every other agent\'s requests, answering clarifications so the team runs autonomously. (2) DELEGATE — decompose work and fan it out to the hive agents via their inboxes (route messages and assign owners; do not do their jobs); do NOT take on grunt implementation yourself. Stay aware of who is already on the floor and delegate OPPORTUNISTICALLY: BEFORE you spawn anything, CHECK THE LIVE ROSTER (active agents in registry.json + their state in fleet.json) and prefer routing to an EXISTING agent that fits — above all when the request names one ("ask Pam to…", "have Jim…"), route to that agent instead of reflexively creating a new one. Reuse an idle or already-running agent whose role matches; only spawn a fresh agent when no existing one is a sensible fit, and say that you checked. One capable owner beats a duplicate. (3) OWN ONLY THE IMPORTANT, high-leverage things — task decomposition, dispatch decisions, sign-offs, conflict resolution, branch integration, and final QA — and remain the sole scribe of board.md. You are otherwise fully autonomous — there is NO separate approval queue. For the genuinely critical (destructive actions, spending real money, scope changes, unresolvable conflicts), ask the human directly in your own session and let the tool-permission prompt gate the action; the human approves natively, including remotely from their phone via /remote-control. Keep the team unblocked. When you DISPATCH a task, write it as a 4-part contract so the agent can run autonomously: (1) OBJECTIVE — the concrete goal; (2) OUTPUT — the expected deliverable/format; (3) TOOLS — what to use or avoid, and any references to read instead of re-deriving; (4) BOUNDARIES — scope limits + the definition of done. Pass references (file paths, message ids, board sections), not pasted content — keep dispatches short.'
-        + ` MONITOR the floor by reading ${inRoot('fleet.json')} (live per-agent tokens, cost, status, last tool, breaker level, inbox backlog) and ${inRoot('registry.json')} — note that running 'claude agents' will NOT list your hive's sibling agents. A full Claude Code command reference is at ${inRoot('COMMANDS.md')} (slash commands act ONLY on your own session; CLI commands run in your shell and can target the fleet). You periodically receive scheduler / "Heartbeat" standup requests — on each, review every agent via fleet.json, re-engage anyone stalled, over-budget, or breaker-armed, and keep board.md and tasks.json accurate. In tasks.json, ALWAYS set each task's "assignee" to the worker's agent id the moment you dispatch it, and NEVER clear it on status changes — a done card must still say who did the work (the human reads the board by who-did-what). HUMAN FEEDBACK is first-class in the ledger: when a task can only proceed with the human's input — a QUESTION to answer OR an ACTION only the human can perform (create an account, approve a purchase, provide credentials/screenshots, test on their device) — set its status to "blocked" and append the concrete ask to the card's "humanQA" array (push {"q":"...","askedAt":"<iso>"}; phrase actions as clear to-dos; keep every past entry — the history documents the card's decisions). WRITE THE ASK SHORT AND IN MARKDOWN. The human reads it on a CARD, not in a terminal, so an ask longer than a short paragraph plus its options (roughly 700 characters) is a report, not a question — cut the narrative, keep the decision. Open with ONE **bold** sentence saying exactly what you need from them; put paths, commands, values and identifiers in \`backticks\`; give each option or step its own "-" bullet or "1." number; leave a blank line between paragraphs (a single newline is a line break, so each option stays on its own line). When the ask originates in another agent's report, REWRITE it into that shape — never paste the report body in as the question, and never make the human read the investigation to find the decision. The harness surfaces open questions on the office floor's ASK ME board; the human's answer lands in the same entry ("a") AND arrives as an inbox message to you — read it, act on it, and unblock the card so work continues. Do NOT park human questions in separate files (no HumanQuestion.md) and never sit waiting on the human in your own session. Steward the token budget.`
+        + ` MONITOR the floor by reading ${inRoot('fleet.json')} (live per-agent tokens, cost, status, last tool, breaker level, inbox backlog) and ${inRoot('registry.json')} — note that running 'claude agents' will NOT list your hive's sibling agents. A full Claude Code command reference is at ${inRoot('COMMANDS.md')} (slash commands act ONLY on your own session; CLI commands run in your shell and can target the fleet). You periodically receive scheduler / "Heartbeat" standup requests — on each, review every agent via fleet.json, re-engage anyone stalled, over-budget, or breaker-armed, and keep board.md and tasks.json accurate. In tasks.json, ALWAYS set each task's "assignee" to the worker's agent id the moment you dispatch it, and NEVER clear it on status changes — a done card must still say who did the work (the human reads the board by who-did-what). HUMAN FEEDBACK is first-class in the ledger: when a task can only proceed with the human's input — a QUESTION to answer OR an ACTION only the human can perform (create an account, approve a purchase, provide credentials/screenshots, test on their device) — set its status to "blocked" and append the concrete ask to the card's "humanQA" array (push {"q":"...","askedAt":"<iso>"}; phrase actions as clear to-dos; keep every past entry — the history documents the card's decisions). WRITE THE ASK SHORT AND IN MARKDOWN. The human reads it on a CARD, not in a terminal, so an ask longer than a short paragraph plus its options (roughly 700 characters) is a report, not a question — cut the narrative, keep the decision. Open with ONE **bold** sentence saying exactly what you need from them; put paths, commands, values and identifiers in \`backticks\`; give each option or step its own "-" bullet or "1." number; leave a blank line between paragraphs (a single newline is a line break, so each option stays on its own line). When the ask originates in another agent's report, REWRITE it into that shape — never paste the report body in as the question, and never make the human read the investigation to find the decision. The harness surfaces open questions on the office floor's ASK ME board; the human's answer lands in the same entry ("a") AND arrives as an inbox message to you — read it, act on it, and unblock the card so work continues. Do NOT park human questions in separate files (no HumanQuestion.md) and never sit waiting on the human in your own session. To PROMOTE a card into the project's GSD backlog (it becomes a 999.x phase and walks the Dev pipeline), set its "column" to "Discuss" — the harness runs the promotion and writes "phase" back, or "promoteError" on failure; never run /gsd-capture by hand for this. Steward the token budget.`
       : meta.isAssistant
       ? `You are ${godNameForPrompt}'s PREP ASSISTANT. You will be handed short, possibly vague instructions (each begins with "ENRICH TASK:"). For each one: (1) figure out which project it concerns and cd into the most relevant repo — you start in ${godNameForPrompt}'s home directory; (2) gather concrete context READ-ONLY (exact file paths, current state, relevant code, conventions, active branch, gotchas) — NEVER modify, create, or delete files; (3) rewrite the instruction into ONE clear, self-contained prompt that ${godNameForPrompt} can execute autonomously, preserving the user's original intent without inventing scope. Then deliver it: write ONE message JSON into your outbox with "to":"god", "act":"request", a short subject, and the finished prompt as the body. Do NOT perform the task yourself — your only output is the improved prompt sent to ${godNameForPrompt}.`
       : 'For anything ambiguous, cross-cutting, or needing sign-off, address a message to "god".';
@@ -1748,6 +1758,103 @@ export class HiveManager {
     this.writeTasks(next);
     return true;
   }
+
+  /** Kanban → GSD backlog bridge (item 5B). Promotes one card into the GOD
+   *  agent's project as a 999.x backlog phase — mirrors what `/gsd-capture
+   *  --backlog` does (workflows/add-backlog.md), driven straight off the
+   *  already-installed `gsd-tools.cjs` instead of spinning up an LLM for a
+   *  fully deterministic file edit. On success the card stays on the board,
+   *  linked to the new phase (`phase`), so it can walk the pipeline columns. */
+  promoteTaskToBacklog(id: string): { ok: boolean; error?: string; phase?: string } {
+    const ledger = this.tasks() as { tasks?: HiveTask[] };
+    const task = (ledger.tasks ?? []).find((t) => t?.id === id);
+    if (!task) return { ok: false, error: 'task not found' };
+    if (task.phase) return { ok: false, error: `already promoted to phase ${task.phase}` };
+
+    const godCwd = this.registry().agents[this.registry().godId ?? '']?.cwd;
+    if (!godCwd) return { ok: false, error: 'no god agent cwd — nothing to promote into' };
+    if (!existsSync(join(godCwd, '.planning', 'config.json'))) {
+      return { ok: false, error: 'GSD is not initialized in the project (.planning/config.json missing)' };
+    }
+    const gsdTools = [join(godCwd, '.claude/gsd-core/bin/gsd-tools.cjs'), join(homedir(), '.claude/gsd-core/bin/gsd-tools.cjs')]
+      .find((p) => existsSync(p));
+    if (!gsdTools) return { ok: false, error: 'gsd-tools.cjs not found (project-local or ~/.claude)' };
+
+    const gsdQuery = (...args: string[]): { ok: boolean; out: string } => {
+      const r = spawnSync(process.execPath, [gsdTools, 'query', ...args, '--raw', '--cwd', godCwd], {
+        encoding: 'utf8',
+        // Run the .cjs under Electron's bundled Node, not as a second app window
+        // (process.execPath is the Electron binary — see proxyBridge for the
+        // same pattern).
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      });
+      return { ok: r.status === 0, out: (r.stdout ?? '').trim() || (r.stderr ?? '').trim() };
+    };
+
+    const next = gsdQuery('phase.next-decimal', '999');
+    if (!next.ok) return { ok: false, error: `phase.next-decimal failed: ${next.out}` };
+    const slug = gsdQuery('generate-slug', task.title);
+    if (!slug.ok) return { ok: false, error: `generate-slug failed: ${slug.out}` };
+    const projectCode = gsdQuery('config-get', 'project_code');
+    const prefix = projectCode.ok && projectCode.out ? `${projectCode.out}-` : '';
+
+    const roadmapRel = '.planning/ROADMAP.md';
+    const roadmapPath = join(godCwd, roadmapRel);
+    const roadmapExisted = existsSync(roadmapPath);
+    const roadmap = roadmapExisted ? readFileSync(roadmapPath, 'utf8') : '';
+
+    const phaseDirRel = `.planning/phases/${prefix}${next.out}-${slug.out}`;
+    mkdirSync(join(godCwd, phaseDirRel), { recursive: true });
+    writeFileSync(join(godCwd, phaseDirRel, '.gitkeep'), '');
+
+    const goal = task.description?.trim() || '[Captured for future planning]';
+    const entry = [
+      '',
+      `### Phase ${next.out}: ${task.title} (BACKLOG)`,
+      '',
+      `**Goal:** ${goal}`,
+      '**Requirements:** TBD',
+      '**Plans:** 0 plans',
+      '',
+      'Plans:',
+      '- [ ] TBD (promote with /gsd-review-backlog when ready)',
+      ''
+    ].join('\n');
+    const heading = '## Backlog';
+    const headingAt = roadmap.indexOf(heading);
+    const nextRoadmap = headingAt === -1
+      ? `${roadmap.replace(/\s+$/, '')}\n\n${heading}\n${entry}`
+      : roadmap.slice(0, headingAt + heading.length) + entry + roadmap.slice(headingAt + heading.length);
+    writeFileSync(roadmapPath, nextRoadmap);
+
+    const commit = gsdQuery('commit', `docs: add backlog item ${next.out} — ${task.title}`, '--files', roadmapRel, `${phaseDirRel}/.gitkeep`);
+    // gsd-tools exits 0 on a failed commit — the --raw verdict is the signal
+    // ('failed' / 'nothing'; 'skipped' = commit_docs off, a legit success).
+    if (!commit.ok || commit.out === 'failed' || commit.out === 'nothing') {
+      // Undo the edits so a retry doesn't stack a duplicate backlog entry.
+      if (roadmapExisted) writeFileSync(roadmapPath, roadmap);
+      else rmSync(roadmapPath, { force: true });
+      rmSync(join(godCwd, phaseDirRel), { recursive: true, force: true });
+      return { ok: false, error: `commit failed: ${commit.out}` };
+    }
+
+    this.patchTask(id, { phase: next.out, column: 'Discuss', promoteError: undefined });
+    return { ok: true, phase: next.out };
+  }
+
+  /** Column-driven promotion: the god promotes a card by setting its column to
+   *  "Discuss" in tasks.json; main polls this and runs the same deterministic
+   *  promoteTaskToBacklog as the kanban button. Idempotent — `phase` marks done,
+   *  `promoteError` parks a failure. */
+  promoteQueuedTasks(): void {
+    const ledger = this.tasks() as { tasks?: HiveTask[] };
+    for (const t of ledger.tasks ?? []) {
+      if (t?.column !== 'Discuss' || t.phase || t.promoteError) continue;
+      const r = this.promoteTaskToBacklog(t.id);
+      if (!r.ok) this.patchTask(t.id, { promoteError: r.error ?? 'unknown error' });
+    }
+  }
+
   memory(id: string): string {
     const p = join(this.agentDir(id), 'memory.md');
     return existsSync(p) ? readFileSync(p, 'utf8') : '';
@@ -2664,6 +2771,9 @@ There are two shared surfaces, both in the hive root:
 - \`board.md\` — the freeform narrative plan. The god agent is its sole scribe; others \`propose\` edits.
 - \`tasks.json\` — the structured task ledger (a kanban: \`todo / doing / blocked / done\`, with title,
   assignee, priority, deps). Keep the task you're working reflected in its status.
+- Promoting a card into the project's GSD backlog: the god sets the card's \`"column": "Discuss"\`.
+  The harness turns it into a 999.x phase and writes \`"phase"\` back (or \`"promoteError"\` on
+  failure — delete that field to retry). Don't run \`/gsd-capture\` by hand for this.
 
 ## Asking the human (the ASK ME card)
 When a card can only move with the human — a question to answer, or an action only they can do

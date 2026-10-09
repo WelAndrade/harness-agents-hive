@@ -34,6 +34,12 @@ export interface HiveTask {
   /** First-class human feedback: the god appends {q} when a card needs the
    *  human; the ASK ME view fills in {a}. Full history stays on the card. */
   humanQA?: HumanQA[];
+  /** GSD phase this card was promoted into (e.g. "999.1"). */
+  phase?: string;
+  /** Pipeline column (e.g. "Discuss"), beside the coarse `status`. */
+  column?: string;
+  /** Last automatic-promotion failure (main parks the card on it). */
+  promoteError?: string;
 }
 
 /** The card's currently open question for the human, if any. An entry the human
@@ -107,7 +113,10 @@ export function parseTasks(raw: unknown): HiveTask[] {
             // resurface on the next poll (openQuestion would see it as open).
             dismissedAt: typeof e.dismissedAt === 'string' ? e.dismissedAt : undefined
           }))
-        : undefined
+        : undefined,
+      phase: typeof t.phase === 'string' && t.phase ? t.phase : undefined,
+      column: typeof t.column === 'string' && t.column ? t.column : undefined,
+      promoteError: typeof t.promoteError === 'string' && t.promoteError ? t.promoteError : undefined
     }));
 }
 
@@ -143,6 +152,25 @@ export function TasksKanban() {
       if (!result.ok) void refresh();
     } catch { /* keep last good; the next poll re-syncs from disk */ }
   }, [refresh]);
+
+  // Kanban → GSD backlog bridge (item 5B). Not optimistic — main only links
+  // the card (phase) once the ROADMAP.md entry is committed; on failure the
+  // error lands in promoteError for the tooltip.
+  const [promoting, setPromoting] = useState<Record<string, true>>({});
+  const [promoteError, setPromoteError] = useState<Record<string, string>>({});
+  const promoteTask = useCallback(async (id: string) => {
+    setPromoting((s) => ({ ...s, [id]: true }));
+    setPromoteError((s) => { const n = { ...s }; delete n[id]; return n; });
+    try {
+      const result = await window.cth.hivePromoteTask(id);
+      if (result.ok) setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, phase: result.phase } : t)));
+      else setPromoteError((s) => ({ ...s, [id]: result.error ?? 'unknown error' }));
+    } catch (e) {
+      setPromoteError((s) => ({ ...s, [id]: e instanceof Error ? e.message : 'unknown error' }));
+    } finally {
+      setPromoting((s) => { const n = { ...s }; delete n[id]; return n; });
+    }
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -209,6 +237,9 @@ export function TasksKanban() {
                     assigneeName={nameFor(t.assignee)}
                     onOpen={() => openTaskDetail(t.id)}
                     onDismiss={() => dismissTask(t.id)}
+                    onPromote={() => promoteTask(t.id)}
+                    promoting={!!promoting[t.id]}
+                    promoteError={promoteError[t.id] ?? t.promoteError}
                   />
                 ))}
               </div>
@@ -225,12 +256,15 @@ export function TasksKanban() {
 // assignee. Everything else (the full contract, deps, controls) lives in the
 // detail view a click away: a kanban card can carry a title at most.
 
-function TaskCard({ task, accent, assigneeName, onOpen, onDismiss }: {
+function TaskCard({ task, accent, assigneeName, onOpen, onDismiss, onPromote, promoting, promoteError }: {
   task: HiveTask;
   accent: string;
   assigneeName?: string;
   onOpen: () => void;
   onDismiss: () => void;
+  onPromote: () => void;
+  promoting: boolean;
+  promoteError?: string;
 }) {
   const { t } = useTranslation();
   return (
@@ -282,6 +316,32 @@ function TaskCard({ task, accent, assigneeName, onOpen, onDismiss }: {
         onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--cth-coral)'; }}
         onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--cth-ink-500)'; }}
       >✕</button>
+      {/* Promote — kanban → GSD backlog bridge (item 5B). Sibling button, same
+          reasoning as dismiss. Title carries the last error, if any. Once
+          promoted, the linked phase number takes the button's place. */}
+      {task.phase ? (
+        <span
+          title={t('kanban.promoteSuccess', { phase: task.phase })}
+          style={{
+            position: 'absolute', bottom: 0, right: 2, lineHeight: '16px',
+            color: 'var(--cth-sky)', fontFamily: 'var(--cth-font-ui)', fontSize: 10
+          }}
+        >{task.phase}</span>
+      ) : <button
+        onClick={(e) => { e.stopPropagation(); onPromote(); }}
+        disabled={promoting}
+        title={promoteError ? t('kanban.promoteError', { error: promoteError }) : t('kanban.promoteTitle')}
+        aria-label={t('kanban.promoteAria')}
+        style={{
+          position: 'absolute', bottom: 0, right: 0, width: 16, height: 16, padding: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
+          border: 'none', cursor: promoting ? 'default' : 'pointer', background: 'transparent',
+          color: promoteError ? 'var(--cth-coral)' : 'var(--cth-ink-500)',
+          fontFamily: 'var(--cth-font-ui)', fontSize: 12, opacity: promoting ? 0.5 : 1
+        }}
+        onMouseEnter={(e) => { if (!promoting) e.currentTarget.style.color = 'var(--cth-sky)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = promoteError ? 'var(--cth-coral)' : 'var(--cth-ink-500)'; }}
+      >{promoting ? '…' : '↑'}</button>}
     </div>
   );
 }

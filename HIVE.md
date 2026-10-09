@@ -165,7 +165,139 @@ is the primary control surface — tune the prompt, not the code.
 
 ---
 
-## 7. Phased plan
+## 7. Departments & the board pipeline (fork direction)
+
+Goal: assign a project to a hive and have it maintained like a company —
+departments (Dev, QA, Marketing, Support, …) each running a pipeline of board
+columns, with the human in the loop only through chat. Decided 2026-10-06.
+
+### Principles
+
+- **Keep the upstream cast.** The existing God and the hire templates
+  (`docs/hires/manifests/`) are the roles; we extend them, we don't replace them.
+- **Michael (God) is the single communication point** — Slack already feeds his
+  message queue; Telegram joins it. He also does PO triage (dedup against open
+  cards + the GSD roadmap, quick vs phase, ask the human when ambiguous). Split a
+  dedicated PO out only if he gets overloaded.
+- **Agents talk to the card, not to each other.** Handoff is by artifact
+  (card → CONTEXT.md → PLAN.md → SUMMARY → PR), MetaGPT-style. The mailbox is
+  for exceptions/escalations to Michael. Evidence: multi-agent failures are
+  dominated by spec and coordination breakdowns (MAST), not by missing roles.
+- **A column has an owner.** A card entering a column wakes its owner; the owner
+  works, moves the card, sleeps. Michael owns no column — he routes, watches
+  stalled cards, escalates, and sends a daily digest.
+- **GSD is Dev-only.** Other departments reuse the *pattern* (stages, artifact
+  handoff, human gates on external effects), not GSD itself. Departments connect
+  at the edges: Support opens a bug card → Dev; a merged PR → Marketing card
+  (release note).
+- **The role owns the column and triggers the GSD command; GSD's own subagents
+  do the work** (gsd-code-reviewer, gsd-security-auditor, …) — no duplicated agents.
+- **The only human touchpoint in Dev is discuss** (plus `human_needed` from
+  verify). Discuss runs as `discuss-phase --power`: questions land in
+  `{NN}-QUESTIONS.json`, the harness relays them to chat, fills `answer`, then
+  finalizes. Everything after discuss is autonomous.
+
+### Agent lifecycle per card
+
+Decided 2026-10-08. Column owners keep a live PTY (the avatar stays on the
+floor) and get a clean context per card: entering a column queues `/clear` +
+the card prompt on the owner's delivery queue, delivered only when idle (same
+path as `/compact`). Continuity between stages lives in the artifacts — every
+GSD command re-reads `STATE.md`/`CONTEXT.md`/`PLAN.md`, not the chat. A finished
+owner with no next card just sits idle (an idle PTY burns no tokens).
+
+**Michael is the exception:** no `/clear`, only compact — the router needs
+continuity (what was triaged, who's stalled, the thread with the human);
+durable facts go to his `memory.md`. One PTY per owner makes WIP 1 implicit;
+parallelism means hiring a second instance (→ worktrees).
+
+### Promotion to GSD
+
+Decided 2026-10-08. Promoting keeps the card alive: it gets `phase = "999.x"`
+and moves to Discuss, so it can walk the columns (the 5B "card disappears"
+behavior is superseded). Michael promotes by moving the card's column in
+`tasks.json`; main detects the change and runs the same deterministic
+`promoteTaskToBacklog` as the kanban button — one code path, no tokens spent.
+The same column-change event later wakes the column owner.
+
+### PR merge
+
+Decided 2026-10-08. Merge to `main` is reversible (squash → `git revert`), so
+the target is auto-merge with a risk gate: Verify passed, CI green, no blocking
+finding from Jim/Creed, and the diff touches no sensitive path (default:
+migrations, auth, infra/terraform, CI, `.planning/config.json`; per-project list
+in the department YAML). Anything else → `Aguardando você`.
+
+It starts in **shadow mode**: the human merges every PR while Michael states
+"would merge / would not" against the criteria. After **30 consecutive PRs**
+with no disagreement, auto-merge turns on. Deploy is not covered here — it's an
+external effect under the Phase 7 risk gates.
+
+### Dev department — GSD steps mapped to the existing cast
+
+| GSD step | Command | Owner |
+| --- | --- | --- |
+| GitHub issue/PR triage | `/gsd-inbox` | Michael |
+| Feedback → backlog | `/gsd-capture --backlog` | Toby (feedback) |
+| Exploration | `/gsd-explore`, `/gsd-spike`, `/gsd-sketch` | Ryan (prototype) |
+| Discuss | `discuss-phase --power` | Ryan (prototype) |
+| Phase research | plan-phase research step | Phyllis |
+| UI contract | `/gsd-ui-phase` | Pam (designer) |
+| Plan + plan-check | `/gsd-plan-phase` | Ryan (prototype) — new template only if volume demands |
+| Execute (feature) | `/gsd-execute-phase`, `/gsd-quick` | Ryan (developer) |
+| Execute (refactor/migration) | same | Stanley |
+| Code review | `/gsd-code-review` (`--fix`) | Jim |
+| Security | `/gsd-secure-phase` | Creed |
+| Compliance (licenses, secrets) | gate before ship (no GSD command) | Toby (compliance) |
+| Verify / UAT | `/gsd-verify-work` | Dwight |
+| Test gaps | `/gsd-validate-phase`, `/gsd-add-tests` | Dwight |
+| Debug | `/gsd-debug` | Dwight |
+| Implemented-UI review | `/gsd-ui-review` | Pam (designer) |
+| Docs | `/gsd-docs-update` | Pam (docs) |
+| Ship / PR | `/gsd-ship` | Ryan (developer) |
+| Milestone close | `/gsd-audit-milestone`, `/gsd-complete-milestone` | Michael |
+
+Outside GSD: **Meredith** (weekly dependency updates → board card), **Angela**
+(token budget per agent/card), **Kevin** (production data fixes, always behind a
+human gate), **Oscar** (reports/metrics), **Kelly** (release notes, social),
+**Erin** (front line for *external* customers — only once they exist; customer
+messages must never reach Michael directly, since he holds routing authority).
+
+### Example flow
+
+```
+"o botão Salvar está com a cor errada"  (Telegram/Slack → Michael)
+  Michael: card in [Triagem] → dedup → trivial? → [Quick] (/gsd-quick, no discuss)
+                                     → phase?   → promote to GSD backlog (5B) → [Discuss]
+  Ryan (prototype): discuss --power → questions in chat → CONTEXT.md → [Plan] → PLAN.md
+  Ryan (developer): [Execute] → Jim [Review] → Creed [Security] → Dwight [Verify]
+  Ryan (developer): [Ship] → PR → Michael replies in the originating thread
+```
+
+### Department as config
+
+A department is columns + owning roles + gates. Role entries reuse the hire
+manifest shape plus two fields: `wake` and (Dev only) `gsd`.
+
+```yaml
+# departments/dev.yaml
+columns: [Triagem, Aguardando você, Discuss, Plan, Execute, Review, Security, Verify, Ship, Done]
+roles:
+  - { hire: ryan-prototype,  wake: on-column Discuss, gsd: "discuss-phase --power" }
+  - { hire: ryan-developer,  wake: on-column Execute, gsd: execute-phase, wip: 1 }
+  - { hire: dwight-qa,       wake: on-column Verify,  gsd: verify-work }
+gates: { Aguardando você: human }
+
+# departments/marketing.yaml — no GSD
+columns: [Temas sugeridos, Aguardando você, Redação, Revisão, Agendado, Publicado]
+roles:
+  - { hire: kelly-social, wake: cron daily }
+gates: { Aguardando você: human, Agendado: human }
+```
+
+---
+
+## 8. Phased plan
 
 - **Phase 0 — Foundation** ✅: `hive.ts` on-disk layer + spawn injection
   (identity, protocol, env) + IPC to read hive state. Agents are hive-aware: they
@@ -192,10 +324,34 @@ is the primary control surface — tune the prompt, not the code.
   lets the human search the same palace.
   - *Still open*: reflection/summarization to bound `memory.md`; needs a live
     `mempalace` install to validate retrieval end-to-end.
+- **Phase 4 — Board pipeline** 🔲: `HiveTask` gains `column`, `department`,
+  `phase` (linked GSD phase), `origin` (generalizes `slack`), `links`
+  (duplicates/parent) and `lock`. Column-owner wake (extends the unread-inbox
+  wake), stall timeout. Kanban → GSD backlog promote (5B) exists — rework it to
+  keep the card (§7 "Promotion to GSD").
+  - *Decided 2026-10-08*: serial — one PTY per owner means WIP 1; worktrees only
+    when a second instance of a role is hired. Failure loop: Verify/Review fail →
+    back to Execute with the report attached; after 2 retries → `Aguardando você`
+    via Michael. **Per-card token budget with hard stop** pulled forward from
+    Phase 7 (the rest of governance stays there).
+- **Phase 5 — Dev department on GSD** 🔲: department YAML + `wake`/`gsd` fields on
+  hire manifests; §7 role mapping wired; Michael's triage rules in his prompt;
+  Dev columns mirror real GSD state (`roadmap analyze`, `phase-plan-index`,
+  `verification status`, `WAITING.json`, STATE `## Needs Human`).
+- **Phase 6 — Chat bridge** 🔲: Telegram next to Slack as Michael's inbox;
+  `discuss --power` `QUESTIONS.json` ↔ chat (buttons, answers written back,
+  finalize); `Aguardando você` items pushed to chat; done replies to the
+  originating thread.
+- **Phase 7 — Governance** 🔲: token/money budget per agent and per card with hard
+  stop (Angela), audit log of mutations and approvals, risk-tiered gates
+  (read free, reversible write auto, money/external/irreversible → human),
+  daily digest from Michael.
+- **Phase 8 — Non-dev departments** 🔲: Marketing (Kelly), data ops (Kevin, human
+  gate), maintenance routines (Meredith); Erin once there are external customers.
 
 ---
 
-## 8. Key risks & mitigations
+## 9. Key risks & mitigations
 
 | Risk | Mitigation |
 | --- | --- |
@@ -205,13 +361,22 @@ is the primary control surface — tune the prompt, not the code.
 | Reprocessing messages | Per-agent `cursor.json`; processed messages move to `inbox/.done/` |
 | `memory.md` unbounded growth | Phase 3 reflection/summarization |
 | Modifying the user's repo with hooks | Write hooks to `<cwd>/.claude/settings.local.json` (gitignored convention) |
+| Authority hijack via chat (Project Vend: fake "vote" replaced the CEO) | Goals, budgets and roster change only from the human's authenticated sender id; customer text goes through Erin, never straight to Michael |
+| CEO agent rubber-stamping spend | Money/external effects approved by the human, not by Michael |
+| Token burn from polling/re-onboarding (Paperclip critique) | Event-driven wake per column; long cron only for routines; cheap model for triage; project summary read on wake |
+| Every message becoming a GSD phase | Michael's triage routes trivial items to `/gsd-quick`/`/gsd-fast` |
 
 ---
 
-## 9. References
+## 10. References
 
 - Anthropic — *Building a multi-agent research system* (lead/subagent, plan-to-memory).
 - LangGraph supervisor (structured routing + handoff registry + checkpoints).
 - FIPA-ACL / KQML (speech acts).
 - Stanford *Generative Agents* (memory stream, reflection, 2D world).
 - Claude Code hooks reference (`Stop`, `PreToolUse`, `UserPromptSubmit`; `stop_hook_active`).
+- Claude Code Channels (Telegram plugin, permission relay) — https://code.claude.com/docs/en/channels
+- OpenAI Symphony SPEC (tracker as control plane, per-state concurrency, stall detection) — https://github.com/openai/symphony/blob/main/SPEC.md
+- MAST — why multi-agent LLM systems fail — https://www.alphaxiv.org/abs/2503.13657
+- Anthropic Project Vend phase 2 (governance lessons) — https://www.anthropic.com/research/project-vend-2
+- Paperclip (org chart, budgets, heartbeats, goal ancestry) — https://github.com/paperclipai/paperclip

@@ -168,6 +168,12 @@ export interface HiveTask {
   /** SHA-256 of the capability token for a generic-webhook-sourced task (drives
    *  the GET status lookup; the raw token is never persisted). */
   webhook?: { tokenHash: string };
+  /** GSD phase this card was promoted into (e.g. "999.1"). */
+  phase?: string;
+  /** Pipeline column (e.g. "Discuss"), beside the coarse `status`. */
+  column?: string;
+  /** Last automatic-promotion failure. */
+  promoteError?: string;
 }
 
 /** A message the router just delivered, with its resolved recipient ids. Drives
@@ -1075,6 +1081,10 @@ const api = {
   /** Atomically remove one named card from the latest main-process ledger. */
   hiveDeleteTask: (id: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('hive:deleteTask', id),
+  /** Promote a card into the god agent's project as a GSD 999.x backlog phase
+   *  (item 5B: kanban → GSD backlog bridge). Links the card (`phase`) on success. */
+  hivePromoteTask: (id: string): Promise<{ ok: boolean; error?: string; phase?: string }> =>
+    ipcRenderer.invoke('hive:promoteTask', id),
 
   // ─── Scheduled missions (recurring auto-dispatch) ──────────────────────────
   listMissions: (): Promise<ScheduledMission[]> => ipcRenderer.invoke('missions:list'),

@@ -3439,6 +3439,11 @@ ipcMain.handle('hive:deleteTask', (_evt, id: unknown) => {
   if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
   return { ok: hive.deleteTask(id) };
 });
+ipcMain.handle('hive:promoteTask', (_evt, id: unknown) => {
+  if (typeof id !== 'string' || !id) return { ok: false, error: 'invalid task id' };
+  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+  return hive.promoteTaskToBacklog(id);
+});
 ipcMain.handle('hive:setArchived', (_evt, id: unknown, archived: unknown) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
   if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
@@ -4993,6 +4998,12 @@ function bootstrapHiveServices(): void {
   // reply still belongs in the history.
   if ((readConfig().webhookTriggers ?? []).length > 0) startWebhookDoneObserver();
   hookServer.start();
+  // Column-driven GSD promotion: god moves a card to "Discuss" in tasks.json,
+  // main promotes it. ponytail: 5s poll like the other ledger observers; switch
+  // to a tasks.json watch if the column-owner wake (Phase 4) needs it faster.
+  setInterval(() => {
+    try { if (hive.enabled()) hive.promoteQueuedTasks(); } catch (e) { console.error('[promote] tick', e); }
+  }, 5000);
   // Bind the telemetry collector BEFORE the renderer spawns any agent, then point
   // the hive at it so every subsequent spawn is instrumented. Best-effort — a bind
   // failure just leaves telemetry off (transcript reconciler stays). No breaker.start():
